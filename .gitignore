@@ -1,0 +1,42 @@
+# Build output
+build/
+bin/
+obj/
+*.o
+*.obj
+*.a
+*.so
+*.d
+
+# CUDA
+*.ptx
+*.cubin
+*.fatbin
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+.ninja_deps
+.ninja_log
+
+# Compiled simulation binaries (no extension, produced by g++ -o)
+PhysXEngine/simulation
+
+# Simulation output
+*.txt
+!docs/**/*.txt
+out/
+frames/
+*.mp4
+
+# Local backups
+*.bak
+*.orig
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp

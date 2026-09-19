@@ -1,0 +1,220 @@
+# GPU particle engine
+
+PhysXEngine started as a CPU two-body gravity integrator, checked against the analytic
+Kepler solution. These are my notes for turning it into a GPU particle engine with
+real-time rendering.
+
+Metis is where I prototype. What works here moves into Hyperion, a magnetic-confinement
+fusion simulation (tokamak and stellarator). That end goal drives most of the choices
+below, and it's the reason I'm not building a Barnes-Hut tree.
+
+## Goals
+
+- Real-time rendering at a sustained 144 Hz, never dipping below 120 Hz
+  (frame budget 6.94 ms, hard ceiling 8.33 ms)
+- 100k+ particles
+- Physics on GPU
+- An architecture that carries into Hyperion without a rewrite
+- Keep the verified CPU accuracy path
+
+Not in scope: Barnes-Hut or FMM tree codes, inertial confinement physics
+(radiation-hydrodynamics), multi-GPU, and anything other than Linux.
+
+## Hardware
+
+Measured on my machine, 2026-09-20.
+
+| | |
+|---|---|
+| OS | Arch Linux, kernel 7.2.3, Wayland (KDE) |
+| CPU | Intel i5-10600K, 6C/12T, AVX2 |
+| RAM | 15 GB |
+| GPU | RTX 2060 12 GB, compute capability 7.5 (Turing) |
+| Driver | NVIDIA 610.57.04 |
+| APIs | OpenGL 4.6, Vulkan 1.4.341, CUDA 13.3 |
+
+### Direct sum, O(N^2)
+
+```
+        N      FP32 ms   FP32 fps      FP64 ms   FP64 fps   penalty
+    16384        1.158      863.6       46.387       21.6      40.1x
+    32768        4.618      216.5      187.244        5.3      40.5x
+    65536       18.513       54.0      760.169        1.3      41.1x
+   100000       43.427       23.0     1748.303        0.6      40.3x
+```
+
+Two things follow:
+
+1. **FP64 is out on this GPU.** The penalty is 40x, worse than Turing's 32x spec
+   ratio. At 144 Hz FP64 tops out around 3000 particles.
+2. **Direct-sum FP32 tops out near 37,000 particles** at 144 Hz with one physics
+   step per frame. Not 100k.
+
+### Barnes-Hut force-phase proxy (FP32)
+
+```
+        N      K           ms        fps
+   100000    128        1.776      562.9
+   100000    256        4.023      248.6
+   100000    512        8.365      119.5
+   250000    128       11.987       83.4
+```
+
+K is interactions per particle. These use fully random gathers, so they're a
+pessimistic floor. A real Morton-sorted tree has better locality.
+
+## Why not Barnes-Hut
+
+Gravity and Coulomb are both 1/r^2, so a tree looks like it should carry over to
+plasma. It doesn't, because plasma screens:
+
+```
+phi(r) ~ (q/r) * exp(-r / lambda_D)
+```
+
+Past a few Debye lengths the interaction is negligible. Barnes-Hut exists to compute
+unscreened long-range far fields cheaply. In a plasma that far field is carried by
+the fields, not by summed pair forces.
+
+For tokamak parameters (n ~ 1e20 m^-3, T ~ 10 keV), lambda_D ~ 74 um with ~1.7e8
+particles per Debye sphere. Weakly coupled, collective rather than collisional.
+That's the regime particle-in-cell was made for, and it's why production fusion codes
+(GENE, XGC, GTC, OSIRIS) are PIC or gyrokinetic, not tree codes.
+
+PIC also scales better:
+
+```
+deposit charge to grid   O(N)
+solve field on grid      O(M log M)    FFT / multigrid
+gather field to particle O(N)
+push particles           O(N)
+```
+
+Linear in particle count, so particle count stops being the limit.
+
+## Architecture
+
+Nothing below the model boundary knows which physics is running.
+
+```
+Renderer      SDL3 + OpenGL 4.6 + CUDA interop
+Diagnostics   energy, momentum, field energy, stability assertions
+──────────────────────────────────────────────────
+IIntegrator   Euler | LeapfrogKDK | Boris
+IForceModel   GravityCPU_FP64 | GravityGPU_FP32 | ElectrostaticPIC | EM-PIC
+──────────────────────────────────────────────────
+SimState      SoA particle buffers + optional grid
+Core          math types, buffers
+```
+
+Interfaces take whole buffers, never single particles:
+
+```cpp
+void IForceModel::computeAccelerations(SimState&);
+void IIntegrator::step(SimState&, IForceModel&, double dt);
+```
+
+One virtual call per step instead of per body. A per-particle virtual interface would
+kill GPU throughput.
+
+A different physics model later (MHD, hydro) is a new `IForceModel`, not a rewrite,
+and can't slow down the tokamak path.
+
+### Windowing and graphics
+
+SDL3 (native Wayland) + OpenGL 4.6 core + CUDA-GL interop.
+
+CUDA-GL buffer interop (`cudaGraphicsGLRegisterBuffer`) is zero-copy and a lot simpler
+than CUDA-Vulkan external memory. The physics is already CUDA, so this is the short
+path.
+
+The only new vendored dependency is a `glad` loader, one file.
+
+Rendering cost doesn't matter here: 100k point sprites is well under 1 ms on this GPU,
+and 100k particles is 3.2 MB out of 12 GB.
+
+## Data layout and precision
+
+SoA throughout. `float4` packing coalesces well (benchmarked):
+
+```
+float4 pos_w[]    // x, y, z, mass-or-weight
+float4 vel_q[]    // vx, vy, vz, charge
+```
+
+| Path | Precision | Why |
+|---|---|---|
+| GPU particles | FP32 | 40x FP64 penalty on Turing |
+| CPU reference | FP64 | It's the validation oracle |
+| Diagnostics accumulation | FP64 | Summing 100k FP32 energies loses the signal |
+
+**PIC deposition:** charge deposition uses atomic adds, and FP32 atomics pick up real
+error with many particles per cell. Fix with per-cell ordering or fixed-point
+accumulation. Cheap to plan for now, painful to retrofit.
+
+The old `struct Particle` is AoS and needs porting to SoA. The test for that port
+already exists, see below.
+
+## Validation
+
+Every stage gets checked against an analytic result or the CPU oracle.
+
+| Test | Checks | Expected |
+|---|---|---|
+| Kepler two-body | gravity, integrator | 4.836 mm error at dt=0.001 (measured) |
+| GPU vs CPU at N=1024 | FP32 kernel correctness | bounded relative force error |
+| Single particle in uniform B | Boris pusher | gyrofrequency, Larmor radius, exact |
+| Langmuir oscillation | field solve | frequency equals plasma frequency |
+| Two-stream instability | full PIC loop | growth rate vs linear theory |
+| Energy / momentum | integrator | bounded, no drift |
+
+The SoA port is proven by re-running Kepler: if the error moves off 4.836 mm at
+dt=0.001, the port broke something.
+
+Two-stream is the standard PIC acceptance test. When the loop is wrong it fails
+loudly and specifically.
+
+### Runtime stability checks
+
+The classic PIC failure modes, asserted at runtime:
+
+- `dx <= lambda_D`, otherwise numerical heating
+- `omega_p * dt < 2`, plasma frequency resolution
+- `c * dt < dx`, CFL, electromagnetic stage only
+
+## Integrator
+
+The current integrator is semi-implicit Euler, first order. Error converges as O(dt).
+
+Stage 1 moves to **leapfrog KDK**: second-order symplectic, same memory, one extra
+half-kick per step. Same bounded energy, error O(dt^2). At the large dt a 100k
+simulation needs, that's the biggest accuracy gain for the cost.
+
+Stage 3 swaps leapfrog for the **Boris pusher** once magnetic fields come in. Boris is
+the standard magnetized-particle integrator and preserves gyro-radius exactly in a
+uniform field.
+
+## Stages
+
+1. **Stage 1:** SDL3 + OpenGL + CUDA direct sum, leapfrog KDK, ~35k particles,
+   checked against the CPU FP64 oracle. Proves the whole pipeline.
+2. **Stage 2:** electrostatic PIC. Charge deposition, Poisson solve via cuFFT, field
+   gather. O(N).
+3. **Stage 3:** Boris pusher, magnetized particles. Tokamak physics starts here.
+4. **Stage 4:** electromagnetic PIC on a Yee grid.
+
+Gyrokinetics comes after Stage 4.
+
+## Risks
+
+| Risk | Plan |
+|---|---|
+| NVIDIA + Wayland + OpenGL on driver 610 | Try it first; fall back to `SDL_VIDEODRIVER=x11` via XWayland |
+| No cmake installed | Install cmake, use ninja |
+| Little free RAM during nvcc builds | Limit parallel compile jobs |
+| FP32 not enough for some diagnostics | Accumulate diagnostics in FP64 |
+
+## Still open
+
+- Grid resolution and domain geometry for Stage 2, once Stage 1 is done
+- Whether Hyperion's renderer needs toroidal geometry or Cartesian is enough for now
