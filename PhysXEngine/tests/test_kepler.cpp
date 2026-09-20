@@ -1,8 +1,9 @@
 #include <gtest/gtest.h>
 #include <cmath>
-#include <vector>
-#include "Particle.hpp"
+#include "metis/GravityCpu.hpp"
 #include "metis/Physics.hpp"
+#include "metis/Scenario.hpp"
+#include "metis/SemiImplicitEuler.hpp"
 
 namespace {
 
@@ -10,7 +11,6 @@ constexpr double kEarthMass = 5.97e24;
 constexpr double kMoonMass  = 7.34e22;
 constexpr double kSeparation = 3.844e8;
 
-// Analytic two-body circular solution, barycentre at rest.
 void analyticMoon(double t, double& outX, double& outY)
 {
     const double M = kEarthMass + kMoonMass;
@@ -21,39 +21,19 @@ void analyticMoon(double t, double& outX, double& outY)
     outY = comY + (kEarthMass / M) * kSeparation * std::cos(omega * t);
 }
 
-std::vector<Particle> makeEarthMoon()
-{
-    const double M = kEarthMass + kMoonMass;
-    const double vRel = std::sqrt(metis::physics::G * M / kSeparation);
-    std::vector<Particle> p;
-    p.push_back({1, {0.0, 0.0, 0.0}, {-vRel * kMoonMass / M, 0.0, 0.0}, kEarthMass, true});
-    p.push_back({2, {0.0, kSeparation, 0.0}, { vRel * kEarthMass / M, 0.0, 0.0}, kMoonMass, true});
-    return p;
-}
-
 double runAndMeasureMoonError(double dt, double totalTime)
 {
-    std::vector<Particle> ps = makeEarthMoon();
-    std::vector<Vector3> forces(ps.size());
-    const long steps = std::lround(totalTime / dt);
+    metis::SimState s = metis::scenario::earthMoon();
+    s.softening = 1.0e4;
+    metis::GravityCpu forces;
+    metis::SemiImplicitEuler integrator;
 
-    for (long s = 0; s < steps; ++s) {
-        for (size_t i = 0; i < ps.size(); ++i) {
-            forces[i] = {0.0, 0.0, 0.0};
-            for (size_t j = 0; j < ps.size(); ++j) {
-                if (i == j) continue;
-                forces[i] += calculateGravitationalForce(ps[i], ps[j]);
-            }
-        }
-        for (size_t i = 0; i < ps.size(); ++i) {
-            ps[i].velocity += applyForce(ps[i], forces[i], dt);
-            ps[i].position += ps[i].velocity * dt;
-        }
-    }
+    const long steps = std::lround(totalTime / dt);
+    for (long i = 0; i < steps; ++i) integrator.step(s, forces, dt);
 
     double ax, ay;
     analyticMoon(steps * dt, ax, ay);
-    return std::abs(ps[1].position.y - ay);
+    return std::abs(s.py[1] - ay);
 }
 
 } // namespace
