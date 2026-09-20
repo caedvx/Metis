@@ -107,6 +107,13 @@ GravityGpu::~GravityGpu() = default;
 
 void GravityGpu::uploadFrom(const SimState& s)
 {
+    // Brackets the whole upload precisely: allocate() commits count/padded
+    // before either memcpy below runs, so if either memcpy throws, a stale
+    // or uninitialised devPos would otherwise still read as a completed
+    // upload. Clearing the flag here and only setting it true once both
+    // memcpys have succeeded ensures a partial upload cannot read as one.
+    impl_->everUploaded = false;
+
     const int n = static_cast<int>(s.size());
     impl_->allocate(n);
 
