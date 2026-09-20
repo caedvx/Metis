@@ -64,6 +64,11 @@ struct GravityGpu::Impl
     int count = 0;
     int padded = 0;
     cudaGraphicsResource* glResource = nullptr;
+    // Tracked explicitly rather than inferred from devPos being non-null:
+    // allocate(0) on a fresh instance takes the pad == padded early return
+    // (both are 0) without ever touching devPos, so an upload of a
+    // genuinely empty state leaves devPos null despite having completed.
+    bool everUploaded = false;
 
     ~Impl()
     {
@@ -124,6 +129,8 @@ void GravityGpu::uploadFrom(const SimState& s)
 
     check(cudaMemcpy(impl_->devVel, hostVel.data(), impl_->padded * sizeof(float4),
                      cudaMemcpyHostToDevice), "upload velocities");
+
+    impl_->everUploaded = true;
 }
 
 void GravityGpu::computeAccelerations(SimState& s)
@@ -224,7 +231,7 @@ namespace
 void GravityGpu::writePositionsToGlBuffer()
 {
     if (!impl_->glResource) return;
-    if (!impl_->devPos)
+    if (!impl_->everUploaded)
         throw std::runtime_error("GravityGpu: uploadFrom(state) required before writePositionsToGlBuffer");
     // A legitimate uploaded-empty state is a clean no-op; a 0-block launch
     // below would otherwise fail with "invalid configuration argument".

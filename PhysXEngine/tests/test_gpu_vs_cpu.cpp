@@ -132,3 +132,20 @@ TEST(GravityGpu, VelocitiesRoundTrip)
     }
     EXPECT_LT(worst, 1e-3) << "worst absolute velocity round-trip error=" << worst;
 }
+
+// Regression coverage for the "start with zero particles, spawn some later"
+// pattern: a fresh instance's Impl::allocate(0) takes the pad==padded
+// early-return before any cudaMalloc runs, so devPos stays null even though
+// uploadFrom genuinely completed. computeAccelerations's guard distinguishes
+// this from a forgotten upload by state size, not pointer nullity, so it
+// should stay a clean no-op here. (writePositionsToGlBuffer cannot be
+// covered by this suite: it requires a real GL context/VBO to reach past
+// attachGlBuffer, which this test harness does not have.)
+TEST(GravityGpu, EmptyStateUploadIsCleanNoOp)
+{
+    metis::SimState empty;
+    metis::GravityGpu gpu;
+
+    ASSERT_NO_THROW(gpu.uploadFrom(empty));
+    EXPECT_NO_THROW(gpu.computeAccelerations(empty));
+}
