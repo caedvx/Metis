@@ -7,10 +7,13 @@ namespace metis
         const std::size_t n = s.size();
         const double half = 0.5 * dt;
 
-        // Accelerations must be valid on entry to the first half-kick.
-        if (!primed_) {
+        // Accelerations must be valid on entry to the first half-kick. Re-prime
+        // whenever the state identity or particle count changes, so reusing one
+        // integrator across simulations cannot kick against stale values.
+        if (primedFor_ != &s || primedSize_ != n) {
             forces.computeAccelerations(s);
-            primed_ = true;
+            primedFor_ = &s;
+            primedSize_ = n;
         }
 
         // Kick (half)

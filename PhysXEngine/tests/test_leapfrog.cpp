@@ -33,6 +33,15 @@ double leapfrogError(double dt, double totalTime)
     return std::abs(s.py[1] - analyticMoonY(steps * dt));
 }
 
+metis::SimState runFreshEarthMoon(metis::LeapfrogKdk& integrator, metis::IForceModel& forces,
+                                   double dt, long steps)
+{
+    metis::SimState s = metis::scenario::earthMoon();
+    s.softening = 1.0e4;
+    for (long i = 0; i < steps; ++i) integrator.step(s, forces, dt);
+    return s;
+}
+
 } // namespace
 
 TEST(LeapfrogKdk, ConvergesSecondOrder)
@@ -52,4 +61,29 @@ TEST(LeapfrogKdk, BeatsEulerAtSameTimestep)
 {
     // At dt=0.1 Euler measured 0.485360 m. Leapfrog must do far better.
     EXPECT_LT(leapfrogError(0.1, 3600.0), 0.01);
+}
+
+TEST(LeapfrogKdk, ReusedInstanceMatchesFreshInstance)
+{
+    // An integrator reused across two simulations must re-prime on the new
+    // state rather than skip its first force evaluation.
+    const double dt = 1.0;
+    const long steps = 100;
+    metis::GravityCpu forces;
+
+    metis::LeapfrogKdk reused;
+    runFreshEarthMoon(reused, forces, dt, steps); // primes and runs on a throwaway state
+    const metis::SimState reusedResult = runFreshEarthMoon(reused, forces, dt, steps);
+
+    metis::LeapfrogKdk fresh;
+    const metis::SimState freshResult = runFreshEarthMoon(fresh, forces, dt, steps);
+
+    for (std::size_t i = 0; i < reusedResult.size(); ++i) {
+        EXPECT_DOUBLE_EQ(reusedResult.px[i], freshResult.px[i]);
+        EXPECT_DOUBLE_EQ(reusedResult.py[i], freshResult.py[i]);
+        EXPECT_DOUBLE_EQ(reusedResult.pz[i], freshResult.pz[i]);
+        EXPECT_DOUBLE_EQ(reusedResult.vx[i], freshResult.vx[i]);
+        EXPECT_DOUBLE_EQ(reusedResult.vy[i], freshResult.vy[i]);
+        EXPECT_DOUBLE_EQ(reusedResult.vz[i], freshResult.vz[i]);
+    }
 }
