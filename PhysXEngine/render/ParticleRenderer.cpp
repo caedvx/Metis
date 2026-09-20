@@ -36,8 +36,12 @@ void main()
     if (r2 > 0.25) discard;
 
     float falloff = 1.0 - smoothstep(0.0, 0.25, r2);
+    // Masses are physical (kg), so log(mass) is itself tens of units before
+    // any scale is applied. 0.1 and -5.368 center the gradient on
+    // scenario::randomCloud's reference mass (totalMass/n = 1e30/32768,
+    // ln ~= 58.68) at t = 0.5, rather than saturating the orange endpoint.
     vec3 tint = mix(vec3(0.35, 0.55, 1.0), vec3(1.0, 0.85, 0.55),
-                    clamp(log(vMass + 1.0) * 0.02, 0.0, 1.0));
+                    clamp(log(vMass + 1.0) * 0.1 - 5.368, 0.0, 1.0));
     fragColor = vec4(tint * falloff, falloff);
 }
 )";
@@ -61,6 +65,8 @@ ParticleRenderer::ParticleRenderer(std::size_t capacity)
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     shader_ = std::make_unique<Shader>(kVertexSource, kFragmentSource);
+    uViewProjectionLoc_ = shader_->uniform("uViewProjection");
+    uPointScaleLoc_ = shader_->uniform("uPointScale");
 }
 
 ParticleRenderer::~ParticleRenderer()
@@ -78,8 +84,8 @@ void ParticleRenderer::draw(const Camera& camera, std::size_t count, float point
 
     shader_->use();
     const glm::mat4 vp = camera.viewProjection();
-    glUniformMatrix4fv(shader_->uniform("uViewProjection"), 1, GL_FALSE, glm::value_ptr(vp));
-    glUniform1f(shader_->uniform("uPointScale"), pointScale);
+    glUniformMatrix4fv(uViewProjectionLoc_, 1, GL_FALSE, glm::value_ptr(vp));
+    glUniform1f(uPointScaleLoc_, pointScale);
 
     glBindVertexArray(vao_);
     glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(count));
@@ -87,6 +93,8 @@ void ParticleRenderer::draw(const Camera& camera, std::size_t count, float point
 
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ZERO);   // restore OpenGL's default blend func
+    glDisable(GL_PROGRAM_POINT_SIZE);
 }
 
 } // namespace metis

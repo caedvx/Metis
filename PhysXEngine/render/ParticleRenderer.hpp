@@ -25,5 +25,7 @@ namespace metis
         unsigned vbo_ = 0;
         unsigned vao_ = 0;
         std::unique_ptr<Shader> shader_;
+        int uViewProjectionLoc_ = -1;
+        int uPointScaleLoc_ = -1;
     };
 }

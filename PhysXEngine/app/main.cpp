@@ -52,15 +52,27 @@ int main(int argc, char** argv)
 
     metis::SimState state = metis::scenario::randomCloud(kCount, 1.0e9, 1.0e30, 42u);
 
+    // renderer is declared before gpu so that, on any exit path (normal
+    // return or exception unwind out of the loop below), gpu's destructor
+    // runs before renderer's: the CUDA graphics resource gets unregistered
+    // before the VBO it points at is deleted. The explicit
+    // gpu.detachGlBuffer() call after the loop does the same thing on the
+    // normal path; this ordering is the backstop for the unwind path.
+    metis::ParticleRenderer renderer(kCount);
+
     metis::GravityGpu gpu;
     gpu.uploadFrom(state);
-
-    metis::ParticleRenderer renderer(kCount);
     gpu.attachGlBuffer(renderer.vbo());
 
     metis::Camera camera;
     camera.setDistance(3.0e9f);
-    camera.setAspect(static_cast<float>(window.width()) / window.height());
+
+    // gl_PointSize = pointScale / gl_Position.w, where w is the particle's
+    // camera-space depth. At camera distance 3e9 with the cloud's radius-1e9
+    // spread, depth ranges roughly 2e9-4e9, averaging the camera distance
+    // itself (3e9, since the cloud is centered on the look-at target). For
+    // an on-screen sprite of ~4px at that average depth: 4 * 3e9 = 1.2e10.
+    constexpr float kPointScale = 1.2e10f;
 
     const bool verifyPixels = std::getenv("METIS_VERIFY_PIXELS") != nullptr;
 
@@ -68,11 +80,12 @@ int main(int argc, char** argv)
     while (window.pollEvents()) {
         if (hasLimit && frame >= maxFrames) break;
 
+        camera.setAspect(static_cast<float>(window.width()) / window.height());
         gpu.writePositionsToGlBuffer();
 
         glClearColor(0.02f, 0.02f, 0.05f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        renderer.draw(camera, kCount, 4.0e8f);
+        renderer.draw(camera, kCount, kPointScale);
 
         if (verifyPixels && hasLimit && frame == maxFrames - 1)
             verifyPixelsRendered(window.width(), window.height());
@@ -80,5 +93,6 @@ int main(int argc, char** argv)
         window.swap();
         ++frame;
     }
+    gpu.detachGlBuffer();
     return 0;
 }

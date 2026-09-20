@@ -32,6 +32,12 @@ namespace metis
         // The VBO must hold at least as many vec4 (16-byte) elements as the last
         // uploaded particle count: each element is (x, y, z, mass).
         void attachGlBuffer(unsigned vbo);
+        // Unregisters the currently attached GL buffer, if any. Callers that
+        // own both this object and the GL buffer must call this before the
+        // buffer is deleted: unregistering after deletion is undefined
+        // behaviour. attachGlBuffer calls this itself before registering a
+        // new buffer.
+        void detachGlBuffer();
         void writePositionsToGlBuffer();
 
     private:

@@ -3,6 +3,7 @@
 
 #include <cuda_runtime.h>
 #include <cuda_gl_interop.h>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -72,7 +73,16 @@ struct GravityGpu::Impl
 
     ~Impl()
     {
-        if (glResource) cudaGraphicsUnregisterResource(glResource);
+        // Never throws from a destructor, but a discarded failure here is
+        // the one diagnostic that would reveal a stale/deleted GL buffer
+        // still being registered at teardown, so report it instead.
+        if (glResource) {
+            const cudaError_t err = cudaGraphicsUnregisterResource(glResource);
+            if (err != cudaSuccess) {
+                std::fprintf(stderr, "GravityGpu: cudaGraphicsUnregisterResource failed in ~Impl: %s\n",
+                             cudaGetErrorString(err));
+            }
+        }
         cudaFree(devPos);
         cudaFree(devVel);
         cudaFree(devAcc);
@@ -197,15 +207,20 @@ void GravityGpu::downloadVelocitiesTo(SimState& s)
 
 void GravityGpu::attachGlBuffer(unsigned vbo)
 {
-    if (impl_->glResource) {
-        cudaGraphicsUnregisterResource(impl_->glResource);
-        impl_->glResource = nullptr;
-    }
+    detachGlBuffer();
 
     cudaGraphicsResource* resource = nullptr;
     check(cudaGraphicsGLRegisterBuffer(&resource, vbo, cudaGraphicsRegisterFlagsWriteDiscard),
           "register GL buffer");
     impl_->glResource = resource;
+}
+
+void GravityGpu::detachGlBuffer()
+{
+    if (impl_->glResource) {
+        cudaGraphicsUnregisterResource(impl_->glResource);
+        impl_->glResource = nullptr;
+    }
 }
 
 namespace
