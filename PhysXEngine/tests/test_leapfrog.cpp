@@ -37,10 +37,14 @@ double leapfrogError(double dt, double totalTime)
 
 TEST(LeapfrogKdk, ConvergesSecondOrder)
 {
-    const double coarse = leapfrogError(0.1, 3600.0);
-    const double fine   = leapfrogError(0.01, 3600.0);
-    // Second order: 10x smaller dt gives ~100x smaller error.
-    EXPECT_GT(coarse / fine, 50.0)
+    // Measured against the analytic solution: a 4x timestep reduction gives
+    // ~19x here, against 16x for second order and 4x for first order.
+    // Do not move this pair below dt=50: leapfrog's truncation error drops
+    // under the FP64 round-off floor (~1.8e-5 m) there and the ratio then
+    // measures rounding noise rather than convergence order.
+    const double coarse = leapfrogError(400.0, 3600.0);
+    const double fine   = leapfrogError(100.0, 3600.0);
+    EXPECT_GT(coarse / fine, 10.0)
         << "Leapfrog KDK must converge as O(dt^2), not O(dt).";
 }
 
