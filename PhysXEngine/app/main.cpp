@@ -7,7 +7,17 @@
 // With argv[1], exits after that many frames so this can run unattended
 int main(int argc, char** argv)
 {
-    const long maxFrames = (argc > 1) ? std::strtol(argv[1], nullptr, 10) : -1;
+    bool hasLimit = false;
+    long maxFrames = 0;
+    if (argc > 1) {
+        char* end = nullptr;
+        maxFrames = std::strtol(argv[1], &end, 10);
+        if (end == argv[1] || *end != '\0' || maxFrames < 0) {
+            std::fprintf(stderr, "usage: metis_app [frame-count >= 0]\n");
+            return 1;
+        }
+        hasLimit = true;
+    }
 
     metis::Window window("Metis", 1280, 720);
     std::printf("GL_VERSION  : %s\n", glGetString(GL_VERSION));
@@ -15,10 +25,11 @@ int main(int argc, char** argv)
 
     long frame = 0;
     while (window.pollEvents()) {
+        if (hasLimit && frame >= maxFrames) break;
         glClearColor(0.02f, 0.02f, 0.05f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         window.swap();
-        if (maxFrames > 0 && ++frame >= maxFrames) break;
+        ++frame;
     }
     return 0;
 }
