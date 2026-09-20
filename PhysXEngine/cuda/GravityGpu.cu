@@ -25,7 +25,7 @@ namespace
         extern __shared__ float4 tile[];
 
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
-        const float4 p = pos[i < n ? i : n - 1];
+        const float4 p = pos[i];
         float ax = 0.0f, ay = 0.0f, az = 0.0f;
 
         for (int t = 0; t < gridDim.x; ++t) {
@@ -68,9 +68,9 @@ struct GravityGpu::Impl
     ~Impl()
     {
         if (glResource) cudaGraphicsUnregisterResource(glResource);
-        if (devPos) cudaFree(devPos);
-        if (devVel) cudaFree(devVel);
-        if (devAcc) cudaFree(devAcc);
+        cudaFree(devPos);
+        cudaFree(devVel);
+        cudaFree(devAcc);
     }
 
     void allocate(int n)
@@ -79,9 +79,15 @@ struct GravityGpu::Impl
         const int pad = blocks * kThreadsPerBlock;
         if (pad == padded) { count = n; return; }
 
-        if (devPos) cudaFree(devPos);
-        if (devVel) cudaFree(devVel);
-        if (devAcc) cudaFree(devAcc);
+        // padded is dropped to 0 for the duration of reallocation: if any
+        // cudaMalloc below throws, a subsequent allocate() call sees no
+        // stale padded value that could otherwise match a retry's pad and
+        // early-return onto freed/dangling device pointers.
+        cudaFree(devPos); devPos = nullptr;
+        cudaFree(devVel); devVel = nullptr;
+        cudaFree(devAcc); devAcc = nullptr;
+        padded = 0;
+
         check(cudaMalloc(&devPos, pad * sizeof(float4)), "cudaMalloc pos");
         check(cudaMalloc(&devVel, pad * sizeof(float4)), "cudaMalloc vel");
         check(cudaMalloc(&devAcc, pad * sizeof(float4)), "cudaMalloc acc");
@@ -121,20 +127,29 @@ void GravityGpu::uploadFrom(const SimState& s)
 
 void GravityGpu::computeAccelerations(SimState& s)
 {
-    const int n = impl_->count;
-    if (n == 0) return;
+    if (static_cast<int>(s.size()) != impl_->count)
+        throw std::runtime_error("GravityGpu: uploadFrom(state) required before computeAccelerations");
 
+    const int n = impl_->count;
     const int blocks = impl_->padded / kThreadsPerBlock;
     const std::size_t shmem = kThreadsPerBlock * sizeof(float4);
     const float eps2 = static_cast<float>(s.softening * s.softening);
+    if (!(eps2 > 0.0f))
+        throw std::runtime_error("GravityGpu requires SimState::softening > 0");
 
     nbodyTiled<<<blocks, kThreadsPerBlock, shmem>>>(
         impl_->devPos, impl_->devAcc, n, eps2, static_cast<float>(physics::G));
     check(cudaGetLastError(), "nbodyTiled launch");
+#ifndef NDEBUG
+    check(cudaDeviceSynchronize(), "nbodyTiled execution");
+#endif
 }
 
 void GravityGpu::downloadTo(SimState& s)
 {
+    if (s.size() != static_cast<std::size_t>(impl_->count))
+        throw std::runtime_error("GravityGpu::downloadTo: state size does not match the uploaded particle count");
+
     const int n = impl_->count;
     std::vector<float4> host(impl_->padded);
     check(cudaMemcpy(host.data(), impl_->devAcc, impl_->padded * sizeof(float4),
@@ -148,6 +163,9 @@ void GravityGpu::downloadTo(SimState& s)
 
 void GravityGpu::downloadVelocitiesTo(SimState& s)
 {
+    if (s.size() != static_cast<std::size_t>(impl_->count))
+        throw std::runtime_error("GravityGpu::downloadVelocitiesTo: state size does not match the uploaded particle count");
+
     const int n = impl_->count;
     std::vector<float4> host(impl_->padded);
     check(cudaMemcpy(host.data(), impl_->devVel, impl_->padded * sizeof(float4),
@@ -161,10 +179,28 @@ void GravityGpu::downloadVelocitiesTo(SimState& s)
 
 void GravityGpu::attachGlBuffer(unsigned vbo)
 {
-    if (impl_->glResource) cudaGraphicsUnregisterResource(impl_->glResource);
-    check(cudaGraphicsGLRegisterBuffer(&impl_->glResource, vbo,
-                                       cudaGraphicsRegisterFlagsWriteDiscard),
+    if (impl_->glResource) {
+        cudaGraphicsUnregisterResource(impl_->glResource);
+        impl_->glResource = nullptr;
+    }
+
+    cudaGraphicsResource* resource = nullptr;
+    check(cudaGraphicsGLRegisterBuffer(&resource, vbo, cudaGraphicsRegisterFlagsWriteDiscard),
           "register GL buffer");
+    impl_->glResource = resource;
+}
+
+namespace
+{
+    // Guarantees the GL resource is unmapped on every exit path, including
+    // an exception thrown from a check() call below. A leaked mapping wedges
+    // the resource: every later call fails with cudaErrorAlreadyMapped and GL
+    // can never touch the buffer again.
+    struct UnmapGuard
+    {
+        cudaGraphicsResource** resource;
+        ~UnmapGuard() { cudaGraphicsUnmapResources(1, resource); }
+    };
 }
 
 void GravityGpu::writePositionsToGlBuffer()
@@ -172,6 +208,7 @@ void GravityGpu::writePositionsToGlBuffer()
     if (!impl_->glResource) return;
 
     check(cudaGraphicsMapResources(1, &impl_->glResource), "map GL resource");
+    UnmapGuard unmapGuard{&impl_->glResource};
 
     float4* mapped = nullptr;
     std::size_t bytes = 0;
@@ -179,11 +216,12 @@ void GravityGpu::writePositionsToGlBuffer()
                                                &bytes, impl_->glResource),
           "get mapped pointer");
 
+    if (bytes < static_cast<std::size_t>(impl_->count) * sizeof(float4))
+        throw std::runtime_error("GravityGpu::writePositionsToGlBuffer: VBO too small for particle count");
+
     const int blocks = (impl_->count + kThreadsPerBlock - 1) / kThreadsPerBlock;
     copyPositionsToVbo<<<blocks, kThreadsPerBlock>>>(impl_->devPos, mapped, impl_->count);
     check(cudaGetLastError(), "copyPositionsToVbo launch");
-
-    check(cudaGraphicsUnmapResources(1, &impl_->glResource), "unmap GL resource");
 }
 
 } // namespace metis

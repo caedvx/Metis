@@ -6,6 +6,12 @@ namespace metis
 {
     // CUDA tiled direct summation, FP32 on device.
     // No CUDA headers here: device state lives behind the pimpl.
+    //
+    // Unlike GravityCpu, this is not a drop-in IForceModel: computeAccelerations
+    // requires a prior uploadFrom(state) call with a state of the same particle
+    // count, and throws otherwise. Results must be retrieved with downloadTo /
+    // downloadVelocitiesTo; state.ax/ay/az are not touched by computeAccelerations
+    // itself.
     class GravityGpu final : public IForceModel
     {
     public:
@@ -23,6 +29,8 @@ namespace metis
         void downloadVelocitiesTo(SimState& state);
 
         // Registers an OpenGL VBO as the position source for zero-copy rendering.
+        // The VBO must hold at least as many vec4 (16-byte) elements as the last
+        // uploaded particle count: each element is (x, y, z, mass).
         void attachGlBuffer(unsigned vbo);
         void writePositionsToGlBuffer();
 

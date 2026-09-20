@@ -1,4 +1,5 @@
 find_package(GTest REQUIRED)
+find_package(OpenGL REQUIRED)
 
 add_library(metis_core
   src/SimState.cpp
@@ -16,12 +17,10 @@ target_include_directories(metis_cuda PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/cuda
 )
 target_link_libraries(metis_cuda PUBLIC metis_core)
+target_link_libraries(metis_cuda PRIVATE OpenGL::GL)
 set_target_properties(metis_cuda PROPERTIES
-  CUDA_SEPARABLE_COMPILATION ON
   POSITION_INDEPENDENT_CODE ON
 )
-find_package(OpenGL REQUIRED)
-target_link_libraries(metis_cuda PUBLIC OpenGL::GL)
 
 add_executable(metis_tests
   tests/test_kepler.cpp
