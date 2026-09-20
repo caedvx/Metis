@@ -205,11 +205,18 @@ namespace
         cudaGraphicsResource** resource;
         ~UnmapGuard()
         {
-            // Never throws from a destructor. A failed unmap also leaves the
-            // runtime's sticky last-error set; drain it here so it cannot be
-            // misattributed to an unrelated check(cudaGetLastError(), ...)
-            // call later (e.g. the next kernel launch's error check).
-            if (cudaGraphicsUnmapResources(1, resource) != cudaSuccess) cudaGetLastError();
+            // Never throws from a destructor. Unmap, then unconditionally
+            // drain the runtime's sticky last-error: either the unmap itself
+            // just failed, or an earlier call in this function (e.g.
+            // cudaGraphicsResourceGetMappedPointer) threw and left its error
+            // sticky while the unmap succeeds. Either way, an undrained
+            // sticky error would otherwise be misattributed to the next
+            // unrelated check(cudaGetLastError(), ...) call (e.g. the next
+            // kernel launch's error check). This does not mask a genuine
+            // hard failure (device assert, illegal address, ECC) — those are
+            // sticky-unrecoverable and cudaGetLastError cannot clear them.
+            cudaGraphicsUnmapResources(1, resource);
+            cudaGetLastError();
         }
     };
 }
@@ -217,9 +224,10 @@ namespace
 void GravityGpu::writePositionsToGlBuffer()
 {
     if (!impl_->glResource) return;
-    // Matches computeAccelerations: nothing to copy is a legitimate no-op,
-    // not an error, and a 0-block launch below would fail with "invalid
-    // configuration argument" if allowed through.
+    if (!impl_->devPos)
+        throw std::runtime_error("GravityGpu: uploadFrom(state) required before writePositionsToGlBuffer");
+    // A legitimate uploaded-empty state is a clean no-op; a 0-block launch
+    // below would otherwise fail with "invalid configuration argument".
     if (impl_->count == 0) return;
 
     check(cudaGraphicsMapResources(1, &impl_->glResource), "map GL resource");
