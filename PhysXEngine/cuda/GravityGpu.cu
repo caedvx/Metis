@@ -87,6 +87,7 @@ struct GravityGpu::Impl
         cudaFree(devVel); devVel = nullptr;
         cudaFree(devAcc); devAcc = nullptr;
         padded = 0;
+        count = 0;
 
         check(cudaMalloc(&devPos, pad * sizeof(float4)), "cudaMalloc pos");
         check(cudaMalloc(&devVel, pad * sizeof(float4)), "cudaMalloc vel");
@@ -129,6 +130,9 @@ void GravityGpu::computeAccelerations(SimState& s)
 {
     if (static_cast<int>(s.size()) != impl_->count)
         throw std::runtime_error("GravityGpu: uploadFrom(state) required before computeAccelerations");
+    // An empty state uploaded and then computed is a legitimate no-op; a
+    // forgotten upload is caught above by the size mismatch instead.
+    if (impl_->count == 0) return;
 
     const int n = impl_->count;
     const int blocks = impl_->padded / kThreadsPerBlock;
@@ -199,13 +203,24 @@ namespace
     struct UnmapGuard
     {
         cudaGraphicsResource** resource;
-        ~UnmapGuard() { cudaGraphicsUnmapResources(1, resource); }
+        ~UnmapGuard()
+        {
+            // Never throws from a destructor. A failed unmap also leaves the
+            // runtime's sticky last-error set; drain it here so it cannot be
+            // misattributed to an unrelated check(cudaGetLastError(), ...)
+            // call later (e.g. the next kernel launch's error check).
+            if (cudaGraphicsUnmapResources(1, resource) != cudaSuccess) cudaGetLastError();
+        }
     };
 }
 
 void GravityGpu::writePositionsToGlBuffer()
 {
     if (!impl_->glResource) return;
+    // Matches computeAccelerations: nothing to copy is a legitimate no-op,
+    // not an error, and a 0-block launch below would fail with "invalid
+    // configuration argument" if allowed through.
+    if (impl_->count == 0) return;
 
     check(cudaGraphicsMapResources(1, &impl_->glResource), "map GL resource");
     UnmapGuard unmapGuard{&impl_->glResource};

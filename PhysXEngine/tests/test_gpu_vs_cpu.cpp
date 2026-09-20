@@ -34,6 +34,11 @@ namespace
     metis::SimState computeOnGpu(metis::GravityGpu& gpu, const metis::SimState& reference)
     {
         metis::SimState gpuState = reference;
+        // reference already carries the CPU oracle's ax/ay/az (every caller
+        // runs the CPU pass first). Clear them so a comparison can only pass
+        // because downloadTo actually wrote the GPU's own result, not because
+        // the oracle silently compared against itself.
+        gpuState.clearAccelerations();
         gpu.uploadFrom(gpuState);
         gpu.computeAccelerations(gpuState);
         gpu.downloadTo(gpuState);
@@ -119,6 +124,8 @@ TEST(GravityGpu, VelocitiesRoundTrip)
 
     double worst = 0.0;
     for (std::size_t i = 0; i < s.size(); ++i) {
+        ASSERT_TRUE(std::isfinite(out.vx[i]) && std::isfinite(out.vy[i]) && std::isfinite(out.vz[i]))
+            << "non-finite velocity at particle " << i;
         worst = std::max(worst, std::abs(out.vx[i] - s.vx[i]));
         worst = std::max(worst, std::abs(out.vy[i] - s.vy[i]));
         worst = std::max(worst, std::abs(out.vz[i] - s.vz[i]));
