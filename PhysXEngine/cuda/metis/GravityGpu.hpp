@@ -1,0 +1,54 @@
+#pragma once
+#include <memory>
+#include "metis/SimState.hpp"
+
+namespace metis
+{
+    // CUDA tiled direct summation, FP32 on device.
+    // No CUDA headers here: device state lives behind the pimpl.
+    //
+    // Deliberately not an IForceModel: computeAccelerations requires a prior
+    // uploadFrom(state) call with a state of the same particle count, and
+    // throws otherwise. Results must be retrieved with downloadTo /
+    // downloadVelocitiesTo; state.ax/ay/az are not touched by
+    // computeAccelerations itself. An IIntegrator built against the
+    // IForceModel interface (e.g. LeapfrogKdk) would compile against this
+    // class but never see real accelerations -- use stepLeapfrog instead,
+    // which does the whole KDK step on device.
+    class GravityGpu final
+    {
+    public:
+        GravityGpu();
+        ~GravityGpu();
+
+        GravityGpu(const GravityGpu&) = delete;
+        GravityGpu& operator=(const GravityGpu&) = delete;
+
+        void computeAccelerations(SimState& state);
+        const char* name() const { return "GravityGpu(FP32)"; }
+
+        void uploadFrom(const SimState& state);
+        void downloadTo(SimState& state);
+        void downloadVelocitiesTo(SimState& state);
+        void downloadPositionsTo(SimState& state);
+
+        // One KDK leapfrog step entirely on device. No host round-trip.
+        void stepLeapfrog(const SimState& state, float dt);
+
+        // Registers an OpenGL VBO as the position source for zero-copy rendering.
+        // The VBO must hold at least as many vec4 (16-byte) elements as the last
+        // uploaded particle count: each element is (x, y, z, mass).
+        void attachGlBuffer(unsigned vbo);
+        // Unregisters the currently attached GL buffer, if any. Callers that
+        // own both this object and the GL buffer must call this before the
+        // buffer is deleted: unregistering after deletion is undefined
+        // behaviour. attachGlBuffer calls this itself before registering a
+        // new buffer.
+        void detachGlBuffer();
+        void writePositionsToGlBuffer();
+
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> impl_;
+    };
+}

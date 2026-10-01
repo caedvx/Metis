@@ -27,6 +27,7 @@ PhysXEngine/simulation
 # Simulation output
 *.txt
 !docs/**/*.txt
+!CMakeLists.txt
 out/
 frames/
 *.mp4
