@@ -123,6 +123,7 @@ int main(int argc, char** argv)
                         timer.averageMs(), timer.averageFps(),
                         timer.worstMs(), timer.worstFps());
             std::fflush(stdout);
+            timer.resetClock();
         }
     }
 

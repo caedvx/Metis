@@ -205,6 +205,8 @@ void GravityGpu::stepLeapfrog(const SimState& s, float dt)
 {
     if (!impl_->everUploaded)
         throw std::runtime_error("GravityGpu: uploadFrom(state) required before stepLeapfrog");
+    if (static_cast<int>(s.size()) != impl_->count)
+        throw std::runtime_error("GravityGpu: uploadFrom(state) required before stepLeapfrog");
 
     const int n = impl_->count;
     if (n == 0) return;
@@ -258,6 +260,22 @@ void GravityGpu::downloadVelocitiesTo(SimState& s)
         s.vx[i] = host[i].x;
         s.vy[i] = host[i].y;
         s.vz[i] = host[i].z;
+    }
+}
+
+void GravityGpu::downloadPositionsTo(SimState& s)
+{
+    if (s.size() != static_cast<std::size_t>(impl_->count))
+        throw std::runtime_error("GravityGpu::downloadPositionsTo: state size does not match the uploaded particle count");
+
+    const int n = impl_->count;
+    std::vector<float4> host(impl_->padded);
+    check(cudaMemcpy(host.data(), impl_->devPos, impl_->padded * sizeof(float4),
+                     cudaMemcpyDeviceToHost), "download positions");
+    for (int i = 0; i < n; ++i) {
+        s.px[i] = host[i].x;
+        s.py[i] = host[i].y;
+        s.pz[i] = host[i].z;
     }
 }
 

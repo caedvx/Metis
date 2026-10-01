@@ -17,6 +17,24 @@ below, and it's the reason I'm not building a Barnes-Hut tree.
 - An architecture that carries into Hyperion without a rewrite
 - Keep the verified CPU accuracy path
 
+## Measured outcome (Stage 1)
+
+Measured after Stage 1, 1280x720, same RTX 2060. I changed the "never below 120 Hz"
+goal to a p99.9 frame-time floor. The single worst frame isn't a stable statistic: run
+long enough and you always find a worse one. So the gate is average >= 144 fps and
+p99.9 >= 120 fps.
+
+- Average alone hits 144 fps somewhere between 32768 and 35000 particles
+  (32768 averages 169.3 fps; 35000 averages ~117-125 fps).
+- The p99.9 floor holds through 26624 particles in every repeat, including a
+  6000-frame run (worst p99.9: 133.8 fps, 11% margin). 26880 passed too, more
+  thinly (123-126 fps), in two runs. 27136 fails (110.3 fps).
+- 32768, the original target, fails p99.9 at 114.6 fps even though its average
+  (169.3 fps) passes.
+- Not 100k: direct-sum FP32 is compute-bound long before memory or interop matter.
+
+Full sweep in `PhysXEngine/README.md`.
+
 Not in scope: Barnes-Hut or FMM tree codes, inertial confinement physics
 (radiation-hydrodynamics), multi-GPU, and anything other than Linux.
 
@@ -49,6 +67,9 @@ Two things follow:
    ratio. At 144 Hz FP64 tops out around 3000 particles.
 2. **Direct-sum FP32 tops out near 37,000 particles** at 144 Hz with one physics
    step per frame. Not 100k.
+   *(That estimate was the physics kernel only: no rendering, no interop, no
+   frame variance. Measured with rendering it's ~32768-35000 for average fps and
+   26624-26880 with the p99.9 floor. See "Measured outcome" above.)*
 
 ### Barnes-Hut force-phase proxy (FP32)
 

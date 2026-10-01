@@ -27,6 +27,7 @@ namespace metis
         void uploadFrom(const SimState& state);
         void downloadTo(SimState& state);
         void downloadVelocitiesTo(SimState& state);
+        void downloadPositionsTo(SimState& state);
 
         // One KDK leapfrog step entirely on device. No host round-trip.
         void stepLeapfrog(const SimState& state, float dt);

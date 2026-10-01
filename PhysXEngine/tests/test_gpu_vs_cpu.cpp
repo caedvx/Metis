@@ -2,6 +2,7 @@
 #include <cmath>
 #include "metis/GravityCpu.hpp"
 #include "metis/GravityGpu.hpp"
+#include "metis/LeapfrogKdk.hpp"
 #include "metis/Scenario.hpp"
 
 namespace
@@ -143,6 +144,65 @@ TEST(GravityGpu, VelocitiesRoundTrip)
 // upload-tracking cannot be covered by this suite: it requires a real GL
 // context/VBO to reach past attachGlBuffer, which this test harness does
 // not have.)
+// Validates the device integrator against the CPU reference, not just the
+// force kernel: N=1000 pads (padded != n), so this also exercises the
+// zero-mass padding path through a full KDK sequence rather than a single
+// force evaluation. Also pins stepLeapfrog's prime-exactly-once behaviour:
+// if the initial force evaluation were skipped, the first kickDrift would
+// read devAcc straight out of cudaMalloc (never written), and the isfinite
+// assertions below would fail immediately rather than this silently passing.
+TEST(GravityGpu, StepLeapfrogMatchesCpuLeapfrogOverMultipleSteps)
+{
+    constexpr int kSteps = 20;
+    constexpr float kDt = 1.0f;
+
+    metis::SimState cpuState = metis::scenario::randomCloud(1000, 1.0e9, 1.0e24, 8181u);
+    metis::GravityCpu cpuForces;
+    metis::LeapfrogKdk cpuIntegrator;
+    for (int i = 0; i < kSteps; ++i)
+        cpuIntegrator.step(cpuState, cpuForces, static_cast<double>(kDt));
+
+    metis::SimState gpuState = metis::scenario::randomCloud(1000, 1.0e9, 1.0e24, 8181u);
+    metis::GravityGpu gpu;
+    gpu.uploadFrom(gpuState);
+    for (int i = 0; i < kSteps; ++i)
+        gpu.stepLeapfrog(gpuState, kDt);
+    gpu.downloadPositionsTo(gpuState);
+    gpu.downloadVelocitiesTo(gpuState);
+
+    double worstPosRel = 0.0, worstVelRel = 0.0;
+    for (std::size_t i = 0; i < cpuState.size(); ++i) {
+        ASSERT_TRUE(std::isfinite(gpuState.px[i]) && std::isfinite(gpuState.py[i])
+                 && std::isfinite(gpuState.pz[i]))
+            << "non-finite position at particle " << i;
+        ASSERT_TRUE(std::isfinite(gpuState.vx[i]) && std::isfinite(gpuState.vy[i])
+                 && std::isfinite(gpuState.vz[i]))
+            << "non-finite velocity at particle " << i;
+
+        const double pdx = gpuState.px[i] - cpuState.px[i];
+        const double pdy = gpuState.py[i] - cpuState.py[i];
+        const double pdz = gpuState.pz[i] - cpuState.pz[i];
+        const double posErr = std::sqrt(pdx*pdx + pdy*pdy + pdz*pdz);
+        const double posMag = std::sqrt(cpuState.px[i]*cpuState.px[i] + cpuState.py[i]*cpuState.py[i]
+                                       + cpuState.pz[i]*cpuState.pz[i]);
+        if (posMag > 0.0) worstPosRel = std::max(worstPosRel, posErr / posMag);
+
+        const double vdx = gpuState.vx[i] - cpuState.vx[i];
+        const double vdy = gpuState.vy[i] - cpuState.vy[i];
+        const double vdz = gpuState.vz[i] - cpuState.vz[i];
+        const double velErr = std::sqrt(vdx*vdx + vdy*vdy + vdz*vdz);
+        const double velMag = std::sqrt(cpuState.vx[i]*cpuState.vx[i] + cpuState.vy[i]*cpuState.vy[i]
+                                       + cpuState.vz[i]*cpuState.vz[i]);
+        if (velMag > 0.0) worstVelRel = std::max(worstVelRel, velErr / velMag);
+    }
+
+    std::printf("StepLeapfrogMatchesCpuLeapfrogOverMultipleSteps: worst pos rel=%.3e  worst vel rel=%.3e\n",
+                worstPosRel, worstVelRel);
+
+    EXPECT_LT(worstPosRel, 1e-3) << "device leapfrog position trajectory diverges from CPU oracle";
+    EXPECT_LT(worstVelRel, 1e-3) << "device leapfrog velocity trajectory diverges from CPU oracle";
+}
+
 TEST(GravityGpu, UploadEmptyStateAfterNonEmptyResetsCount)
 {
     metis::GravityGpu gpu;

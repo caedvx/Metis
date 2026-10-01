@@ -10,9 +10,9 @@ namespace metis
     class FrameTimer
     {
     public:
-        explicit FrameTimer(std::size_t window = 300) : window_(window)
+        explicit FrameTimer(std::size_t window = 300) : window_(std::max<std::size_t>(window, 1))
         {
-            samples_.reserve(window);
+            samples_.reserve(window_);
             last_ = std::chrono::steady_clock::now();
         }
 
@@ -21,8 +21,12 @@ namespace metis
             const auto now = std::chrono::steady_clock::now();
             const double ms = std::chrono::duration<double, std::milli>(now - last_).count();
             last_ = now;
-            if (samples_.size() < window_) samples_.push_back(ms);
-            else samples_[cursor_ = (cursor_ + 1) % window_] = ms;
+            if (samples_.size() < window_) {
+                samples_.push_back(ms);
+            } else {
+                samples_[cursor_] = ms;
+                cursor_ = (cursor_ + 1) % window_;
+            }
         }
 
         double averageMs() const
@@ -41,6 +45,11 @@ namespace metis
 
         double averageFps() const { const double m = averageMs(); return m > 0.0 ? 1000.0 / m : 0.0; }
         double worstFps() const { const double m = worstMs(); return m > 0.0 ? 1000.0 / m : 0.0; }
+
+        // Excludes whatever happens between a tick() and this call (e.g. a
+        // diagnostic printf) from every frame's measured interval, rather
+        // than letting it land in the next tick()'s delta.
+        void resetClock() { last_ = std::chrono::steady_clock::now(); }
 
     private:
         std::size_t window_;
