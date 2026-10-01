@@ -15,7 +15,7 @@ checks; the device path (FP32) drives the interactive renderer.
 ### Current state
 
 Semi-implicit Euler, verified against the analytic Kepler solution
-(`tests/test_kepler.cpp`):
+(`PhysXEngine/tests/test_kepler.cpp`):
 
 | dt | position error at t=3600 s | ratio |
 |---|---|---|
@@ -27,11 +27,14 @@ Semi-implicit Euler, verified against the analytic Kepler solution
 Clean first-order convergence. Over a full lunar orbit (2.36e9 steps at dt=0.001) all
 timestep choices agree within 0.014 m and orbital radius holds to under 1.3 mm.
 
-Leapfrog KDK (`tests/test_leapfrog.cpp`), against the same analytic solution: cutting
-dt by 4x (400 -> 100) cuts the error by ~19x, consistent with second-order O(dt^2)
-convergence against Euler's 10x (first order). At dt=0.1, leapfrog's error is already
-down to 0.0000187 m — the FP64 round-off floor for this problem, ~26,000x smaller
-than Euler's 0.485360 m at the same timestep.
+Leapfrog KDK (`PhysXEngine/tests/test_leapfrog.cpp`), against the same analytic
+solution: cutting dt by 4x (400 -> 100) cuts the error by ~19x. At a 4x dt
+reduction, second order predicts 16x and first order (Euler) predicts 4x, so
+leapfrog's ~19x is consistent with O(dt^2) convergence; Euler's 10x in the table
+above came from a 10x dt cut, not a 4x one, and is not a direct comparison to this
+figure. At dt=0.1, leapfrog's error is already down to 0.0000187 m — the FP64
+round-off floor for this problem, ~26,000x smaller than Euler's 0.485360 m at the
+same timestep.
 
 ### Performance
 
@@ -42,9 +45,14 @@ a convergent statistic — a long enough run always finds a worse frame, so it
 is unpassable by construction rather than a real requirement. p99.9 is the
 reproducible version of the same intent.) Frame times were sampled with no
 per-frame I/O in the measured loop, discarding the first 600 of each run as
-warm-up (shader compilation, allocation, GPU clock ramp-up).
+warm-up (shader compilation, allocation, GPU clock ramp-up). Percentiles are
+computed over the full post-warmup sample population of each run (not a
+rolling window: `FrameTimer`'s 300-sample interactive default would make
+p99.9 meaningless at this scale) via the same no-I/O protocol now committed
+at `PhysXEngine/bench/bench_noio.cpp` (`metis_bench_noio` target), so this
+table is regenerable rather than resting on an uncommitted scratch harness.
 
-| particles | avg fps | p99 fps | p99.9 fps | max fps | gate |
+| particles | avg fps | p99 fps | p99.9 fps | worst-frame fps | gate |
 |---|---|---|---|---|---|
 | 8192 | 1411.6 | 601.4 | 518.3 | 465.1 | pass |
 | 16384 | 556.9 | 365.4 | 343.8 | 318.5 | pass |

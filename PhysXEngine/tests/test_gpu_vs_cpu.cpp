@@ -134,35 +134,36 @@ TEST(GravityGpu, VelocitiesRoundTrip)
     EXPECT_LT(worst, 1e-3) << "worst absolute velocity round-trip error=" << worst;
 }
 
-// Regression coverage for the "particle count shrinks to zero" transition:
-// computeAccelerations only accepts a state whose size matches impl_->count,
-// so this fails loudly (a size-mismatch throw) if uploadFrom(empty) ever
-// left count at its previous nonzero value instead of resetting it to 0.
-// A test that only ever uploads an empty state to a fresh instance cannot
-// exercise this: impl_->count defaults to 0, so it would pass whether or
-// not uploadFrom updates anything at all. (writePositionsToGlBuffer's
-// upload-tracking cannot be covered by this suite: it requires a real GL
-// context/VBO to reach past attachGlBuffer, which this test harness does
-// not have.)
-// Validates the device integrator against the CPU reference, not just the
-// force kernel: N=1000 pads (padded != n), so this also exercises the
-// zero-mass padding path through a full KDK sequence rather than a single
-// force evaluation. Also pins stepLeapfrog's prime-exactly-once behaviour:
-// if the initial force evaluation were skipped, the first kickDrift would
-// read devAcc straight out of cudaMalloc (never written), and the isfinite
-// assertions below would fail immediately rather than this silently passing.
+// Validates the device integrator against the CPU reference over a full
+// KDK sequence, not just a single force evaluation: N=1000 pads (padded !=
+// n), so this also exercises the zero-mass padding path. Also pins
+// stepLeapfrog's prime-exactly-once behaviour: if the initial force
+// evaluation were skipped, the first kickDrift would read devAcc straight
+// out of cudaMalloc (never written), and the isfinite assertions below
+// would fail immediately rather than this silently passing.
+//
+// Mass and dt match main.cpp's scenario (1e30, 2.0), not the smaller
+// values this test used to carry: at 1e24/dt=1.0 the real per-step drift
+// is ~1e-3 m against an ~8 m FP32 ULP at this position scale (~1e8 m), so
+// kickDrift's position update rounded back to the same float every step
+// and the test passed on a frozen simulation. Positions are compared as
+// displacement from each path's own t=0 rather than as absolute values, so
+// a tiny genuine drift can no longer cancel favourably against the
+// ~1e8-1e9 m absolute position scale the way it did before.
 TEST(GravityGpu, StepLeapfrogMatchesCpuLeapfrogOverMultipleSteps)
 {
     constexpr int kSteps = 20;
-    constexpr float kDt = 1.0f;
+    constexpr float kDt = 2.0f;
 
-    metis::SimState cpuState = metis::scenario::randomCloud(1000, 1.0e9, 1.0e24, 8181u);
+    metis::SimState cpuState = metis::scenario::randomCloud(1000, 1.0e9, 1.0e30, 8181u);
+    const metis::SimState cpuInit = cpuState;
     metis::GravityCpu cpuForces;
     metis::LeapfrogKdk cpuIntegrator;
     for (int i = 0; i < kSteps; ++i)
         cpuIntegrator.step(cpuState, cpuForces, static_cast<double>(kDt));
 
-    metis::SimState gpuState = metis::scenario::randomCloud(1000, 1.0e9, 1.0e24, 8181u);
+    metis::SimState gpuState = metis::scenario::randomCloud(1000, 1.0e9, 1.0e30, 8181u);
+    const metis::SimState gpuInit = gpuState;
     metis::GravityGpu gpu;
     gpu.uploadFrom(gpuState);
     for (int i = 0; i < kSteps; ++i)
@@ -170,7 +171,7 @@ TEST(GravityGpu, StepLeapfrogMatchesCpuLeapfrogOverMultipleSteps)
     gpu.downloadPositionsTo(gpuState);
     gpu.downloadVelocitiesTo(gpuState);
 
-    double worstPosRel = 0.0, worstVelRel = 0.0;
+    double worstDispErr = 0.0, worstVelRel = 0.0, maxCpuDisp = 0.0, maxGpuDisp = 0.0;
     for (std::size_t i = 0; i < cpuState.size(); ++i) {
         ASSERT_TRUE(std::isfinite(gpuState.px[i]) && std::isfinite(gpuState.py[i])
                  && std::isfinite(gpuState.pz[i]))
@@ -179,13 +180,28 @@ TEST(GravityGpu, StepLeapfrogMatchesCpuLeapfrogOverMultipleSteps)
                  && std::isfinite(gpuState.vz[i]))
             << "non-finite velocity at particle " << i;
 
-        const double pdx = gpuState.px[i] - cpuState.px[i];
-        const double pdy = gpuState.py[i] - cpuState.py[i];
-        const double pdz = gpuState.pz[i] - cpuState.pz[i];
-        const double posErr = std::sqrt(pdx*pdx + pdy*pdy + pdz*pdz);
-        const double posMag = std::sqrt(cpuState.px[i]*cpuState.px[i] + cpuState.py[i]*cpuState.py[i]
-                                       + cpuState.pz[i]*cpuState.pz[i]);
-        if (posMag > 0.0) worstPosRel = std::max(worstPosRel, posErr / posMag);
+        const double cdx = cpuState.px[i] - cpuInit.px[i];
+        const double cdy = cpuState.py[i] - cpuInit.py[i];
+        const double cdz = cpuState.pz[i] - cpuInit.pz[i];
+        const double cpuDisp = std::sqrt(cdx*cdx + cdy*cdy + cdz*cdz);
+
+        const double gdx = gpuState.px[i] - gpuInit.px[i];
+        const double gdy = gpuState.py[i] - gpuInit.py[i];
+        const double gdz = gpuState.pz[i] - gpuInit.pz[i];
+        const double gpuDisp = std::sqrt(gdx*gdx + gdy*gdy + gdz*gdz);
+
+        maxCpuDisp = std::max(maxCpuDisp, cpuDisp);
+        maxGpuDisp = std::max(maxGpuDisp, gpuDisp);
+
+        const double ddx = gdx - cdx, ddy = gdy - cdy, ddz = gdz - cdz;
+        // Worst absolute displacement mismatch, normalized once below by
+        // the ensemble's own displacement scale (maxCpuDisp) rather than
+        // per-particle: individual displacements here span ~5e3-2.4e5 m, so
+        // dividing each particle's error by its own (possibly modest)
+        // displacement inflates particles that simply moved less into
+        // spurious "worst" outliers, the same near-zero-denominator
+        // problem a per-particle metric has at any scale.
+        worstDispErr = std::max(worstDispErr, std::sqrt(ddx*ddx + ddy*ddy + ddz*ddz));
 
         const double vdx = gpuState.vx[i] - cpuState.vx[i];
         const double vdy = gpuState.vy[i] - cpuState.vy[i];
@@ -196,13 +212,46 @@ TEST(GravityGpu, StepLeapfrogMatchesCpuLeapfrogOverMultipleSteps)
         if (velMag > 0.0) worstVelRel = std::max(worstVelRel, velErr / velMag);
     }
 
-    std::printf("StepLeapfrogMatchesCpuLeapfrogOverMultipleSteps: worst pos rel=%.3e  worst vel rel=%.3e\n",
-                worstPosRel, worstVelRel);
+    // Worst per-particle displacement mismatch, normalized once by the
+    // ensemble's own displacement scale rather than per-particle (see the
+    // comment above worstDispErr's accumulation for why).
+    const double worstPosRel = maxCpuDisp > 0.0 ? worstDispErr / maxCpuDisp : 0.0;
 
-    EXPECT_LT(worstPosRel, 1e-3) << "device leapfrog position trajectory diverges from CPU oracle";
+    std::printf("StepLeapfrogMatchesCpuLeapfrogOverMultipleSteps: worst pos rel=%.3e  worst vel rel=%.3e  "
+                "max cpu disp=%.3e m  max gpu disp=%.3e m\n",
+                worstPosRel, worstVelRel, maxCpuDisp, maxGpuDisp);
+
+    // Proves the simulation actually advanced, independent of the relative
+    // checks below: a disabled kickDrift measured here at 46 m of "motion"
+    // on a genuinely frozen position buffer -- not 0, because downloading
+    // float32 positions and differencing against the float64 init state
+    // carries its own upload/download round-trip quantization noise at this
+    // position scale (~1e8-1e9 m). 1000 m clears that noise floor by >10x
+    // while staying >100x below the hundreds-of-thousands-of-metres real
+    // displacement this configuration produces when the kernel is correct.
+    ASSERT_GT(maxCpuDisp, 1000.0) << "CPU oracle itself barely moved; scenario/dt regressed";
+    ASSERT_GT(maxGpuDisp, 1000.0) << "device integrator produced no meaningful displacement: frozen simulation";
+
+    // Measured worstPosRel at this seed/config is ~2.7e-3 (FP32 force-sum
+    // round-off compounding over 20 KDK steps across 1000 interacting
+    // particles); 1e-2 keeps a real margin above that without being loose
+    // enough to miss a genuine regression (e.g. a reintroduced clamping or
+    // scaling defect, which moved this metric by orders of magnitude in
+    // earlier rounds of this test, not a few x).
+    EXPECT_LT(worstPosRel, 1e-2) << "device leapfrog displacement trajectory diverges from CPU oracle";
     EXPECT_LT(worstVelRel, 1e-3) << "device leapfrog velocity trajectory diverges from CPU oracle";
 }
 
+// Regression coverage for the "particle count shrinks to zero" transition:
+// computeAccelerations only accepts a state whose size matches impl_->count,
+// so this fails loudly (a size-mismatch throw) if uploadFrom(empty) ever
+// left count at its previous nonzero value instead of resetting it to 0.
+// A test that only ever uploads an empty state to a fresh instance cannot
+// exercise this: impl_->count defaults to 0, so it would pass whether or
+// not uploadFrom updates anything at all. (writePositionsToGlBuffer's
+// upload-tracking cannot be covered by this suite: it requires a real GL
+// context/VBO to reach past attachGlBuffer, which this test harness does
+// not have.)
 TEST(GravityGpu, UploadEmptyStateAfterNonEmptyResetsCount)
 {
     metis::GravityGpu gpu;

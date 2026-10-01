@@ -66,13 +66,18 @@ TEST(LeapfrogKdk, BeatsEulerAtSameTimestep)
 TEST(LeapfrogKdk, ReusedInstanceMatchesFreshInstance)
 {
     // An integrator reused across two simulations must re-prime on the new
-    // state rather than skip its first force evaluation.
+    // state rather than skip its first force evaluation -- primedFor_ is
+    // compared by address, so this can only be exercised if the first run's
+    // SimState and reusedResult are at genuinely distinct addresses. Both
+    // are kept alive simultaneously (rather than letting the first's
+    // temporary be destroyed before the second is constructed) so the
+    // compiler cannot coincidentally reuse one's storage for the other.
     const double dt = 1.0;
     const long steps = 100;
     metis::GravityCpu forces;
 
     metis::LeapfrogKdk reused;
-    runFreshEarthMoon(reused, forces, dt, steps); // primes and runs on a throwaway state
+    const metis::SimState firstRun = runFreshEarthMoon(reused, forces, dt, steps);
     const metis::SimState reusedResult = runFreshEarthMoon(reused, forces, dt, steps);
 
     metis::LeapfrogKdk fresh;

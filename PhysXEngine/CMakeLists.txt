@@ -50,3 +50,6 @@ target_link_libraries(metis_render PUBLIC
 
 add_executable(metis_app app/main.cpp)
 target_link_libraries(metis_app PRIVATE metis_render metis_cuda)
+
+add_executable(metis_bench_noio bench/bench_noio.cpp)
+target_link_libraries(metis_bench_noio PRIVATE metis_render metis_cuda)

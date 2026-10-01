@@ -87,15 +87,12 @@ struct GravityGpu::Impl
     int count = 0;
     int padded = 0;
     cudaGraphicsResource* glResource = nullptr;
-    // Tracked explicitly rather than inferred from devPos being non-null:
-    // allocate(0) on a fresh instance takes the pad == padded early return
-    // (both are 0) without ever touching devPos, so an upload of a
-    // genuinely empty state leaves devPos null despite having completed.
+    // True once uploadFrom completes, even for n=0 (allocate(0) returns
+    // early without touching devPos, so a null devPos can't tell "never
+    // uploaded" apart from "uploaded empty").
     bool everUploaded = false;
-    // Set once stepLeapfrog has run the initial force evaluation for the
-    // currently uploaded state. Reset on every uploadFrom, since a new
-    // upload changes devPos and leaves devAcc stale from whatever state
-    // was uploaded before.
+    // True once stepLeapfrog has primed devAcc for this upload. Reset by
+    // uploadFrom, since a new upload leaves devAcc stale.
     bool primed = false;
 
     ~Impl()
@@ -229,6 +226,9 @@ void GravityGpu::stepLeapfrog(const SimState& s, float dt)
     kick<<<blocks, kThreadsPerBlock>>>(impl_->devVel, impl_->devAcc, n, half);
 
     check(cudaGetLastError(), "stepLeapfrog launch");
+#ifndef NDEBUG
+    check(cudaDeviceSynchronize(), "stepLeapfrog execution");
+#endif
 }
 
 void GravityGpu::downloadTo(SimState& s)
@@ -292,32 +292,27 @@ void GravityGpu::attachGlBuffer(unsigned vbo)
 void GravityGpu::detachGlBuffer()
 {
     if (impl_->glResource) {
-        cudaGraphicsUnregisterResource(impl_->glResource);
+        const cudaError_t err = cudaGraphicsUnregisterResource(impl_->glResource);
+        if (err != cudaSuccess) {
+            std::fprintf(stderr, "GravityGpu::detachGlBuffer: cudaGraphicsUnregisterResource failed: %s\n",
+                         cudaGetErrorString(err));
+        }
         impl_->glResource = nullptr;
     }
 }
 
 namespace
 {
-    // Guarantees the GL resource is unmapped on every exit path, including
-    // an exception thrown from a check() call below. A leaked mapping wedges
-    // the resource: every later call fails with cudaErrorAlreadyMapped and GL
-    // can never touch the buffer again.
+    // Unmaps on every exit path, including a check() throw below -- a
+    // leaked mapping wedges the resource (cudaErrorAlreadyMapped forever).
     struct UnmapGuard
     {
         cudaGraphicsResource** resource;
         ~UnmapGuard()
         {
-            // Never throws from a destructor. Unmap, then unconditionally
-            // drain the runtime's sticky last-error: either the unmap itself
-            // just failed, or an earlier call in this function (e.g.
-            // cudaGraphicsResourceGetMappedPointer) threw and left its error
-            // sticky while the unmap succeeds. Either way, an undrained
-            // sticky error would otherwise be misattributed to the next
-            // unrelated check(cudaGetLastError(), ...) call (e.g. the next
-            // kernel launch's error check). This does not mask a genuine
-            // hard failure (device assert, illegal address, ECC) — those are
-            // sticky-unrecoverable and cudaGetLastError cannot clear them.
+            // Drains the sticky last-error after unmapping so an earlier
+            // throw in this function can't be misattributed to the next
+            // unrelated check(cudaGetLastError(), ...) call.
             cudaGraphicsUnmapResources(1, resource);
             cudaGetLastError();
         }

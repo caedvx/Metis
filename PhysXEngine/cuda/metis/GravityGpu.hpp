@@ -1,28 +1,31 @@
 #pragma once
 #include <memory>
-#include "metis/IForceModel.hpp"
+#include "metis/SimState.hpp"
 
 namespace metis
 {
     // CUDA tiled direct summation, FP32 on device.
     // No CUDA headers here: device state lives behind the pimpl.
     //
-    // Unlike GravityCpu, this is not a drop-in IForceModel: computeAccelerations
-    // requires a prior uploadFrom(state) call with a state of the same particle
-    // count, and throws otherwise. Results must be retrieved with downloadTo /
-    // downloadVelocitiesTo; state.ax/ay/az are not touched by computeAccelerations
-    // itself.
-    class GravityGpu final : public IForceModel
+    // Deliberately not an IForceModel: computeAccelerations requires a prior
+    // uploadFrom(state) call with a state of the same particle count, and
+    // throws otherwise. Results must be retrieved with downloadTo /
+    // downloadVelocitiesTo; state.ax/ay/az are not touched by
+    // computeAccelerations itself. An IIntegrator built against the
+    // IForceModel interface (e.g. LeapfrogKdk) would compile against this
+    // class but never see real accelerations -- use stepLeapfrog instead,
+    // which does the whole KDK step on device.
+    class GravityGpu final
     {
     public:
         GravityGpu();
-        ~GravityGpu() override;
+        ~GravityGpu();
 
         GravityGpu(const GravityGpu&) = delete;
         GravityGpu& operator=(const GravityGpu&) = delete;
 
-        void computeAccelerations(SimState& state) override;
-        const char* name() const override { return "GravityGpu(FP32)"; }
+        void computeAccelerations(SimState& state);
+        const char* name() const { return "GravityGpu(FP32)"; }
 
         void uploadFrom(const SimState& state);
         void downloadTo(SimState& state);

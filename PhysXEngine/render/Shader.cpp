@@ -27,14 +27,27 @@ namespace
     }
 }
 
+namespace
+{
+    // Deletes the shader on every exit path out of the constructor below,
+    // including a throw from the fragment compile or the link check -- vs
+    // and fs would otherwise leak on those paths (the constructor never
+    // completing means ~Shader never gets to clean them up either).
+    struct ShaderGuard
+    {
+        unsigned id;
+        ~ShaderGuard() { if (id) glDeleteShader(id); }
+    };
+}
+
 Shader::Shader(const char* vertexSource, const char* fragmentSource)
 {
-    const unsigned vs = compile(GL_VERTEX_SHADER, vertexSource);
-    const unsigned fs = compile(GL_FRAGMENT_SHADER, fragmentSource);
+    ShaderGuard vs{compile(GL_VERTEX_SHADER, vertexSource)};
+    ShaderGuard fs{compile(GL_FRAGMENT_SHADER, fragmentSource)};
 
     program_ = glCreateProgram();
-    glAttachShader(program_, vs);
-    glAttachShader(program_, fs);
+    glAttachShader(program_, vs.id);
+    glAttachShader(program_, fs.id);
     glLinkProgram(program_);
 
     int ok = 0;
@@ -44,11 +57,10 @@ Shader::Shader(const char* vertexSource, const char* fragmentSource)
         glGetProgramiv(program_, GL_INFO_LOG_LENGTH, &len);
         std::vector<char> log(len > 1 ? len : 1);
         glGetProgramInfoLog(program_, len, nullptr, log.data());
+        glDeleteProgram(program_);
+        program_ = 0;
         throw std::runtime_error(std::string("program link failed: ") + log.data());
     }
-
-    glDeleteShader(vs);
-    glDeleteShader(fs);
 }
 
 Shader::~Shader() { if (program_) glDeleteProgram(program_); }

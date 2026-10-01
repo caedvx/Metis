@@ -33,7 +33,7 @@ p99.9 >= 120 fps.
   (169.3 fps) passes.
 - Not 100k: direct-sum FP32 is compute-bound long before memory or interop matter.
 
-Full sweep in `PhysXEngine/README.md`.
+Full sweep in `README.md`.
 
 Not in scope: Barnes-Hut or FMM tree codes, inertial confinement physics
 (radiation-hydrodynamics), multi-GPU, and anything other than Linux.

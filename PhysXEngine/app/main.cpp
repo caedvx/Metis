@@ -91,7 +91,10 @@ int main(int argc, char** argv)
 
     const bool verifyPixels = std::getenv("METIS_VERIFY_PIXELS") != nullptr;
 
-    metis::FrameTimer timer;
+    // A non-interactive run (frame limit given) sizes the window to the
+    // whole run so percentileMs sees the full population; FrameTimer's
+    // 300-sample interactive default would make p99.9 meaningless.
+    metis::FrameTimer timer(hasLimit ? static_cast<std::size_t>(maxFrames) : 300);
     long frame = 0;
     while (window.pollEvents()) {
         if (hasLimit && frame >= maxFrames) break;
@@ -119,16 +122,24 @@ int main(int argc, char** argv)
         ++frame;
 
         if (frame % 120 == 0) {
-            std::printf("avg %.2f ms (%.1f fps)   worst %.2f ms (%.1f fps)\n",
+            std::printf("avg %.2f ms (%.1f fps)   p50 %.2f ms (%.1f fps)   p99 %.2f ms (%.1f fps)   "
+                        "p99.9 %.2f ms (%.1f fps)   worst %.2f ms (%.1f fps)\n",
                         timer.averageMs(), timer.averageFps(),
+                        timer.percentileMs(0.50), timer.percentileFps(0.50),
+                        timer.percentileMs(0.99), timer.percentileFps(0.99),
+                        timer.percentileMs(0.999), timer.percentileFps(0.999),
                         timer.worstMs(), timer.worstFps());
             std::fflush(stdout);
             timer.resetClock();
         }
     }
 
-    std::printf("final: avg %.2f ms (%.1f fps)   worst %.2f ms (%.1f fps)\n",
+    std::printf("final: avg %.2f ms (%.1f fps)   p50 %.2f ms (%.1f fps)   p99 %.2f ms (%.1f fps)   "
+                "p99.9 %.2f ms (%.1f fps)   worst %.2f ms (%.1f fps)\n",
                 timer.averageMs(), timer.averageFps(),
+                timer.percentileMs(0.50), timer.percentileFps(0.50),
+                timer.percentileMs(0.99), timer.percentileFps(0.99),
+                timer.percentileMs(0.999), timer.percentileFps(0.999),
                 timer.worstMs(), timer.worstFps());
 
     gpu.detachGlBuffer();
