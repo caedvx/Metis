@@ -56,6 +56,8 @@ namespace metis
 
     bool Window::pollEvents()
     {
+        mouseDx_ = mouseDy_ = scroll_ = 0.0f;
+
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) return false;
@@ -64,6 +66,16 @@ namespace metis
                 width_ = e.window.data1;
                 height_ = e.window.data2;
                 glViewport(0, 0, width_, height_);
+            }
+            if (e.type == SDL_EVENT_MOUSE_MOTION) {
+                mouseDx_ += e.motion.xrel;
+                mouseDy_ += e.motion.yrel;
+            }
+            if (e.type == SDL_EVENT_MOUSE_WHEEL) scroll_ += e.wheel.y;
+            if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+                const bool down = (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN);
+                if (e.button.button == SDL_BUTTON_LEFT) leftHeld_ = down;
+                if (e.button.button == SDL_BUTTON_RIGHT) rightHeld_ = down;
             }
         }
         return true;

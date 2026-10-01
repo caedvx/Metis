@@ -55,6 +55,28 @@ namespace
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i < n) vbo[i] = pos[i];
     }
+
+    __global__ void kickDrift(float4* pos, float4* vel, const float4* acc,
+                              int n, float halfDt, float dt)
+    {
+        const int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i >= n) return;
+        vel[i].x += acc[i].x * halfDt;
+        vel[i].y += acc[i].y * halfDt;
+        vel[i].z += acc[i].z * halfDt;
+        pos[i].x += vel[i].x * dt;
+        pos[i].y += vel[i].y * dt;
+        pos[i].z += vel[i].z * dt;
+    }
+
+    __global__ void kick(float4* vel, const float4* acc, int n, float halfDt)
+    {
+        const int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i >= n) return;
+        vel[i].x += acc[i].x * halfDt;
+        vel[i].y += acc[i].y * halfDt;
+        vel[i].z += acc[i].z * halfDt;
+    }
 }
 
 struct GravityGpu::Impl
@@ -70,6 +92,11 @@ struct GravityGpu::Impl
     // (both are 0) without ever touching devPos, so an upload of a
     // genuinely empty state leaves devPos null despite having completed.
     bool everUploaded = false;
+    // Set once stepLeapfrog has run the initial force evaluation for the
+    // currently uploaded state. Reset on every uploadFrom, since a new
+    // upload changes devPos and leaves devAcc stale from whatever state
+    // was uploaded before.
+    bool primed = false;
 
     ~Impl()
     {
@@ -123,6 +150,7 @@ void GravityGpu::uploadFrom(const SimState& s)
     // upload. Clearing the flag here and only setting it true once both
     // memcpys have succeeded ensures a partial upload cannot read as one.
     impl_->everUploaded = false;
+    impl_->primed = false;
 
     const int n = static_cast<int>(s.size());
     impl_->allocate(n);
@@ -171,6 +199,34 @@ void GravityGpu::computeAccelerations(SimState& s)
 #ifndef NDEBUG
     check(cudaDeviceSynchronize(), "nbodyTiled execution");
 #endif
+}
+
+void GravityGpu::stepLeapfrog(const SimState& s, float dt)
+{
+    if (!impl_->everUploaded)
+        throw std::runtime_error("GravityGpu: uploadFrom(state) required before stepLeapfrog");
+
+    const int n = impl_->count;
+    if (n == 0) return;
+
+    const int blocks = impl_->padded / kThreadsPerBlock;
+    const std::size_t shmem = kThreadsPerBlock * sizeof(float4);
+    const float eps2 = static_cast<float>(s.softening * s.softening);
+    if (!(eps2 > 0.0f))
+        throw std::runtime_error("GravityGpu requires SimState::softening > 0");
+    const float g = static_cast<float>(physics::G);
+    const float half = 0.5f * dt;
+
+    if (!impl_->primed) {
+        nbodyTiled<<<blocks, kThreadsPerBlock, shmem>>>(impl_->devPos, impl_->devAcc, n, eps2, g);
+        impl_->primed = true;
+    }
+
+    kickDrift<<<blocks, kThreadsPerBlock>>>(impl_->devPos, impl_->devVel, impl_->devAcc, n, half, dt);
+    nbodyTiled<<<blocks, kThreadsPerBlock, shmem>>>(impl_->devPos, impl_->devAcc, n, eps2, g);
+    kick<<<blocks, kThreadsPerBlock>>>(impl_->devVel, impl_->devAcc, n, half);
+
+    check(cudaGetLastError(), "stepLeapfrog launch");
 }
 
 void GravityGpu::downloadTo(SimState& s)

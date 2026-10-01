@@ -28,6 +28,9 @@ namespace metis
         void downloadTo(SimState& state);
         void downloadVelocitiesTo(SimState& state);
 
+        // One KDK leapfrog step entirely on device. No host round-trip.
+        void stepLeapfrog(const SimState& state, float dt);
+
         // Registers an OpenGL VBO as the position source for zero-copy rendering.
         // The VBO must hold at least as many vec4 (16-byte) elements as the last
         // uploaded particle count: each element is (x, y, z, mass).
