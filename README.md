@@ -26,7 +26,8 @@ timesteps agree within 0.014 m and the orbital radius holds to under 1.3 mm.
 Leapfrog KDK (`PhysXEngine/tests/test_leapfrog.cpp`) is second order: halving dt cuts
 the error about 4x until it hits the FP64 round-off floor, between 1e-5 and 2e-5 m. At
 dt=0.1 that's ~26,000x smaller than Euler. Full table in
-[docs/design/01-gpu-engine.md](docs/design/01-gpu-engine.md#convergence-measured).
+[docs/design/01-gpu-engine.md](docs/design/01-gpu-engine.md#convergence-measured);
+regenerate it with `./build/PhysXEngine/metis_bench_convergence`.
 
 ### Performance
 
