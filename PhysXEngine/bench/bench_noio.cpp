@@ -9,10 +9,8 @@
 #include "ParticleRenderer.hpp"
 #include "Window.hpp"
 
-// No-I/O percentile harness: isolates frame timing from any per-frame
-// diagnostic output (main.cpp's periodic printf would otherwise land inside
-// the measured interval). This is what produced the README's sweep figures;
-// kept in-tree so those numbers are reproducible.
+// Frame-timing sweep with no per-frame I/O. Produces the README's
+// performance table.
 int main(int argc, char** argv)
 {
     const std::size_t count = (argc > 1) ? std::strtoul(argv[1], nullptr, 10) : 32768;
@@ -32,8 +30,7 @@ int main(int argc, char** argv)
     metis::Camera camera;
     camera.setDistance(3.0e9f);
 
-    // Window sized to the whole post-warmup run: FrameTimer's 300-sample
-    // interactive default would make p99.9 meaningless over a run this long.
+    // Window sized to the whole run so p99.9 covers every frame.
     metis::FrameTimer timer(static_cast<std::size_t>(total > warmup ? total - warmup : 1));
 
     long frame = 0;
@@ -48,10 +45,8 @@ int main(int argc, char** argv)
         renderer.draw(camera, count, kPointScale);
         window.swap();
 
-        // The warm-up frames (shader compile, allocation, clock ramp-up)
-        // are never ticked into the timer at all, rather than ticked and
-        // discarded afterwards: resetClock() right as the measured region
-        // starts keeps their elapsed time out of the first real sample too.
+        // Warm-up frames never reach the timer; resetClock() keeps their time out
+        // of the first real sample.
         if (frame == warmup - 1) timer.resetClock();
         else if (frame >= warmup) timer.tick();
         ++frame;

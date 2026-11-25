@@ -4,17 +4,12 @@
 
 namespace metis
 {
-    // CUDA tiled direct summation, FP32 on device.
-    // No CUDA headers here: device state lives behind the pimpl.
+    // CUDA tiled direct summation, FP32 on device. CUDA headers stay behind the
+    // pimpl.
     //
-    // Deliberately not an IForceModel: computeAccelerations requires a prior
-    // uploadFrom(state) call with a state of the same particle count, and
-    // throws otherwise. Results must be retrieved with downloadTo /
-    // downloadVelocitiesTo; state.ax/ay/az are not touched by
-    // computeAccelerations itself. An IIntegrator built against the
-    // IForceModel interface (e.g. LeapfrogKdk) would compile against this
-    // class but never see real accelerations -- use stepLeapfrog instead,
-    // which does the whole KDK step on device.
+    // Not an IForceModel: computeAccelerations needs a prior uploadFrom and
+    // doesn't write state.ax/ay/az, so LeapfrogKdk would run on stale
+    // accelerations. Use stepLeapfrog.
     class GravityGpu final
     {
     public:
@@ -39,11 +34,8 @@ namespace metis
         // The VBO must hold at least as many vec4 (16-byte) elements as the last
         // uploaded particle count: each element is (x, y, z, mass).
         void attachGlBuffer(unsigned vbo);
-        // Unregisters the currently attached GL buffer, if any. Callers that
-        // own both this object and the GL buffer must call this before the
-        // buffer is deleted: unregistering after deletion is undefined
-        // behaviour. attachGlBuffer calls this itself before registering a
-        // new buffer.
+        // Unregisters the attached GL buffer. Call this before deleting the buffer;
+        // attachGlBuffer calls it before registering a new one.
         void detachGlBuffer();
         void writePositionsToGlBuffer();
 

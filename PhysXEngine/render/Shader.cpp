@@ -29,10 +29,8 @@ namespace
 
 namespace
 {
-    // Deletes the shader on every exit path out of the constructor below,
-    // including a throw from the fragment compile or the link check -- vs
-    // and fs would otherwise leak on those paths (the constructor never
-    // completing means ~Shader never gets to clean them up either).
+    // Deletes the shader on every exit path, including a throw from the compile
+    // or link check, since ~Shader never runs if the constructor throws.
     struct ShaderGuard
     {
         unsigned id;

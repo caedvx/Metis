@@ -46,11 +46,9 @@ metis::SimState runFreshEarthMoon(metis::LeapfrogKdk& integrator, metis::IForceM
 
 TEST(LeapfrogKdk, ConvergesSecondOrder)
 {
-    // Measured against the analytic solution: a 4x timestep reduction gives
-    // ~19x here, against 16x for second order and 4x for first order.
-    // Do not move this pair below dt=50: leapfrog's truncation error drops
-    // under the FP64 round-off floor (~1.8e-5 m) there and the ratio then
-    // measures rounding noise rather than convergence order.
+    // 4x smaller dt gives ~19x less error: second order predicts 16x, first
+    // order 4x. Keep dt above 50, below that the error hits the FP64 floor
+    // (~1.8e-5 m) and the ratio measures rounding.
     const double coarse = leapfrogError(400.0, 3600.0);
     const double fine   = leapfrogError(100.0, 3600.0);
     EXPECT_GT(coarse / fine, 10.0)
@@ -65,13 +63,8 @@ TEST(LeapfrogKdk, BeatsEulerAtSameTimestep)
 
 TEST(LeapfrogKdk, ReusedInstanceMatchesFreshInstance)
 {
-    // An integrator reused across two simulations must re-prime on the new
-    // state rather than skip its first force evaluation -- primedFor_ is
-    // compared by address, so this can only be exercised if the first run's
-    // SimState and reusedResult are at genuinely distinct addresses. Both
-    // are kept alive simultaneously (rather than letting the first's
-    // temporary be destroyed before the second is constructed) so the
-    // compiler cannot coincidentally reuse one's storage for the other.
+    // A reused integrator has to re-prime on a new state. primedFor_ compares
+    // addresses, so both states stay alive to keep them at distinct addresses.
     const double dt = 1.0;
     const long steps = 100;
     metis::GravityCpu forces;

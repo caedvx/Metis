@@ -87,19 +87,15 @@ struct GravityGpu::Impl
     int count = 0;
     int padded = 0;
     cudaGraphicsResource* glResource = nullptr;
-    // True once uploadFrom completes, even for n=0 (allocate(0) returns
-    // early without touching devPos, so a null devPos can't tell "never
-    // uploaded" apart from "uploaded empty").
+    // Set once uploadFrom finishes, even for n=0, where devPos stays null.
     bool everUploaded = false;
-    // True once stepLeapfrog has primed devAcc for this upload. Reset by
-    // uploadFrom, since a new upload leaves devAcc stale.
+    // devAcc is primed for the current upload. uploadFrom resets it.
     bool primed = false;
 
     ~Impl()
     {
-        // Never throws from a destructor, but a discarded failure here is
-        // the one diagnostic that would reveal a stale/deleted GL buffer
-        // still being registered at teardown, so report it instead.
+        // Can't throw from a destructor, but a failed unregister here means a GL
+        // buffer was deleted while still registered, so report it.
         if (glResource) {
             const cudaError_t err = cudaGraphicsUnregisterResource(glResource);
             if (err != cudaSuccess) {
@@ -118,10 +114,8 @@ struct GravityGpu::Impl
         const int pad = blocks * kThreadsPerBlock;
         if (pad == padded) { count = n; return; }
 
-        // padded is dropped to 0 for the duration of reallocation: if any
-        // cudaMalloc below throws, a subsequent allocate() call sees no
-        // stale padded value that could otherwise match a retry's pad and
-        // early-return onto freed/dangling device pointers.
+        // Zero padded while reallocating, so a throwing cudaMalloc can't leave a
+        // stale value that a later allocate() early-returns on.
         cudaFree(devPos); devPos = nullptr;
         cudaFree(devVel); devVel = nullptr;
         cudaFree(devAcc); devAcc = nullptr;
@@ -141,11 +135,8 @@ GravityGpu::~GravityGpu() = default;
 
 void GravityGpu::uploadFrom(const SimState& s)
 {
-    // Brackets the whole upload precisely: allocate() commits count/padded
-    // before either memcpy below runs, so if either memcpy throws, a stale
-    // or uninitialised devPos would otherwise still read as a completed
-    // upload. Clearing the flag here and only setting it true once both
-    // memcpys have succeeded ensures a partial upload cannot read as one.
+    // allocate() sets count/padded before the memcpys, so clear the flag first
+    // and set it only once both copies succeed.
     impl_->everUploaded = false;
     impl_->primed = false;
 
@@ -179,8 +170,7 @@ void GravityGpu::computeAccelerations(SimState& s)
 {
     if (static_cast<int>(s.size()) != impl_->count)
         throw std::runtime_error("GravityGpu: uploadFrom(state) required before computeAccelerations");
-    // An empty state uploaded and then computed is a legitimate no-op; a
-    // forgotten upload is caught above by the size mismatch instead.
+    // Uploaded-empty is a no-op; a missing upload fails the size check above.
     if (impl_->count == 0) return;
 
     const int n = impl_->count;
@@ -303,16 +293,13 @@ void GravityGpu::detachGlBuffer()
 
 namespace
 {
-    // Unmaps on every exit path, including a check() throw below -- a
-    // leaked mapping wedges the resource (cudaErrorAlreadyMapped forever).
+    // Unmap on every exit path. A leaked mapping wedges the resource.
     struct UnmapGuard
     {
         cudaGraphicsResource** resource;
         ~UnmapGuard()
         {
-            // Drains the sticky last-error after unmapping so an earlier
-            // throw in this function can't be misattributed to the next
-            // unrelated check(cudaGetLastError(), ...) call.
+            // Clear the sticky error so an earlier throw isn't blamed on the next check.
             cudaGraphicsUnmapResources(1, resource);
             cudaGetLastError();
         }
@@ -324,8 +311,8 @@ void GravityGpu::writePositionsToGlBuffer()
     if (!impl_->glResource) return;
     if (!impl_->everUploaded)
         throw std::runtime_error("GravityGpu: uploadFrom(state) required before writePositionsToGlBuffer");
-    // A legitimate uploaded-empty state is a clean no-op; a 0-block launch
-    // below would otherwise fail with "invalid configuration argument".
+    // Uploaded-empty is a no-op. A 0-block launch would fail with an invalid
+    // configuration error.
     if (impl_->count == 0) return;
 
     check(cudaGraphicsMapResources(1, &impl_->glResource), "map GL resource");

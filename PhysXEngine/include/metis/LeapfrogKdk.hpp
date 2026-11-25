@@ -5,9 +5,8 @@
 namespace metis
 {
     // Kick-drift-kick leapfrog. Second-order symplectic.
-    // Caches accelerations between steps so each step after the first costs
-    // one force evaluation (the first costs two: the priming call plus the
-    // post-drift recompute).
+    // Accelerations carry over between steps: one force evaluation per step,
+    // two on the first.
     class LeapfrogKdk final : public IIntegrator
     {
     public:

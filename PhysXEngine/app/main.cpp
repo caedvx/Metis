@@ -12,9 +12,8 @@
 
 namespace
 {
-    // Reads the framebuffer back and reports how many pixels differ from the
-    // clear color. Only runs when METIS_VERIFY_PIXELS is set in the
-    // environment, so it never touches the default frame loop.
+    // Counts framebuffer pixels that differ from the clear color. Only runs
+    // with METIS_VERIFY_PIXELS set.
     void verifyPixelsRendered(int width, int height)
     {
         std::vector<unsigned char> pixels(static_cast<std::size_t>(width) * height * 4);
@@ -29,11 +28,8 @@ namespace
     }
 }
 
-// With no argv[1], runs interactively until Escape/close.
-// With argv[1], exits after that many frames so this can run unattended
-// An optional argv[2] overrides the particle count (default 32768), which
-// the same measurement needs to sweep without disturbing the argv[1]
-// contract above.
+// No argv[1]: interactive until Escape or close. argv[1]: exit after that
+// many frames. argv[2]: particle count (default 32768).
 int main(int argc, char** argv)
 {
     bool hasLimit = false;
@@ -66,12 +62,9 @@ int main(int argc, char** argv)
 
     metis::SimState state = metis::scenario::randomCloud(count, 1.0e9, 1.0e30, 42u);
 
-    // renderer is declared before gpu so that, on any exit path (normal
-    // return or exception unwind out of the loop below), gpu's destructor
-    // runs before renderer's: the CUDA graphics resource gets unregistered
-    // before the VBO it points at is deleted. The explicit
-    // gpu.detachGlBuffer() call after the loop does the same thing on the
-    // normal path; this ordering is the backstop for the unwind path.
+    // renderer is declared before gpu so gpu's destructor runs first on unwind,
+    // unregistering the CUDA resource before its VBO is deleted. The explicit
+    // detachGlBuffer() after the loop covers the normal path.
     metis::ParticleRenderer renderer(count);
 
     metis::GravityGpu gpu;
@@ -81,19 +74,15 @@ int main(int argc, char** argv)
     metis::Camera camera;
     camera.setDistance(3.0e9f);
 
-    // gl_PointSize = pointScale / gl_Position.w, where w is the particle's
-    // camera-space depth. At camera distance 3e9 with the cloud's radius-1e9
-    // spread, depth ranges roughly 2e9-4e9, averaging the camera distance
-    // itself (3e9, since the cloud is centered on the look-at target). For
-    // an on-screen sprite of ~4px at that average depth: 4 * 3e9 = 1.2e10.
+    // gl_PointSize = pointScale / w. The cloud sits ~3e9 from the camera, so
+    // 4 px there needs 4 * 3e9 = 1.2e10.
     constexpr float kPointScale = 1.2e10f;
     constexpr float kDt = 2.0f;
 
     const bool verifyPixels = std::getenv("METIS_VERIFY_PIXELS") != nullptr;
 
-    // A non-interactive run (frame limit given) sizes the window to the
-    // whole run so percentileMs sees the full population; FrameTimer's
-    // 300-sample interactive default would make p99.9 meaningless.
+    // With a frame limit, size the window to the whole run so p99.9 covers
+    // every frame.
     metis::FrameTimer timer(hasLimit ? static_cast<std::size_t>(maxFrames) : 300);
     long frame = 0;
     while (window.pollEvents()) {

@@ -5,10 +5,9 @@
 
 namespace metis
 {
-    // Rolling frame-time statistics: average, percentiles, and absolute
-    // worst. The 120 Hz floor is a p99.9 threshold, not the worst frame --
-    // worst is a max statistic and keeps getting worse the longer a run
-    // goes, so it is not something a finite run can meaningfully pass.
+    // Rolling frame-time stats: average, percentiles, worst. The 120 Hz floor
+    // is a p99.9 threshold, because the worst frame keeps getting worse the
+    // longer a run goes.
     class FrameTimer
     {
     public:
@@ -45,10 +44,8 @@ namespace metis
             return *std::max_element(samples_.begin(), samples_.end());
         }
 
-        // Sorted nearest-rank percentile over the retained samples (the
-        // rolling window, or the whole run if the window was sized to it).
-        // p in [0, 1]; the index is clamped so p=1.0 cannot read past the
-        // end of the sorted array.
+        // Nearest-rank percentile over the retained samples, p in [0, 1]. The index
+        // is clamped so p=1.0 stays in bounds.
         double percentileMs(double p) const
         {
             if (samples_.empty()) return 0.0;
@@ -62,9 +59,8 @@ namespace metis
         double averageFps() const { const double m = averageMs(); return m > 0.0 ? 1000.0 / m : 0.0; }
         double worstFps() const { const double m = worstMs(); return m > 0.0 ? 1000.0 / m : 0.0; }
 
-        // Excludes whatever happens between a tick() and this call (e.g. a
-        // diagnostic printf) from every frame's measured interval, rather
-        // than letting it land in the next tick()'s delta.
+        // Keeps whatever ran since the last tick() (e.g. a printf) out of the next
+        // frame's interval.
         void resetClock() { last_ = std::chrono::steady_clock::now(); }
 
     private:

@@ -36,13 +36,9 @@ void main()
     if (r2 > 0.25) discard;
 
     float falloff = 1.0 - smoothstep(0.0, 0.25, r2);
-    // randomCloud gives every particle the same mass (totalMass/n), so
-    // vMass -- and therefore this mix() -- is one constant for the whole
-    // cloud, not a per-particle gradient. 0.1 and -5.368 only pick which
-    // constant: they place scenario::randomCloud's reference mass at
-    // n=32768 (totalMass/n = 1e30/32768, ln ~= 58.68) at t = 0.5 instead of
-    // pinned to the orange endpoint. A different particle count shifts
-    // totalMass/n and therefore the tint.
+    // randomCloud gives every particle the same mass, so this tint is one
+    // constant for the cloud. 0.1 and -5.368 put the n=32768 reference mass
+    // (ln(1e30/32768) ~= 58.68) mid-gradient.
     vec3 tint = mix(vec3(0.35, 0.55, 1.0), vec3(1.0, 0.85, 0.55),
                     clamp(log(vMass + 1.0) * 0.1 - 5.368, 0.0, 1.0));
     fragColor = vec4(tint * falloff, falloff);
