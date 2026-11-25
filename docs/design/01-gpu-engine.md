@@ -239,3 +239,24 @@ Gyrokinetics comes after Stage 4.
 
 - Grid resolution and domain geometry for Stage 2, once Stage 1 is done
 - Whether Hyperion's renderer needs toroidal geometry or Cartesian is enough for now
+
+## Convergence, measured
+
+Earth-Moon two-body, FP64 CPU path, error in the Moon's y position against the analytic
+orbit at t=3600 s, softening 1e4 m.
+
+| dt (s) | semi-implicit Euler (m) | leapfrog KDK (m) |
+|---|---|---|
+| 400 | 1941.511 | 0.001636505 |
+| 200 | 970.7552 | 0.0003957748 |
+| 100 | 485.3775 | 0.00008559227 |
+| 50 | 242.6887 | 0.000008165836 |
+| 25 | 121.3444 | 0.00001138449 |
+| 10 | 48.53773 | 0.00001686811 |
+| 1 | 4.853756 | 0.00001871586 |
+| 0.1 | 0.48536 | 0.00001865625 |
+| 0.01 | 0.04851437 | 0.00001168251 |
+
+Euler halves its error every time dt halves: first order. Leapfrog drops by 4.1x and 4.6x
+over the first two halvings, which is second order, then flattens between 1e-5 and 2e-5 m.
+That's the FP64 round-off floor for this problem, not truncation error.
